@@ -319,8 +319,9 @@ def annual_seasonality():
         
         # Forward fill avg_performance for smoother lines
         result['avg_performance'] = result['avg_performance'].fillna(method='ffill').fillna(0)
-        # Don't forward fill YTD - leave as null for future weeks
-        # result['ytd_performance'] remains with NaN for weeks not yet completed
+        
+        # Convert NaN to None (which becomes null in JSON)
+        result = result.where(pd.notnull(result), None)
         
         return jsonify({
             'ticker': ticker,
