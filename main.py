@@ -122,6 +122,67 @@ def home():
         'example': '/seasonality/monthly?ticker=^GSPC&period=10y'
     })
 
+@app.route('/seasonality/weekly', methods=['GET'])
+def weekly_seasonality():
+    """
+    Calculate average weekly performance and compare with YTD trend.
+    Query params:
+    - ticker: Stock/Index ticker (default: ^GSPC)
+    - period: Data period (default: 10y)
+    """
+    ticker = request.args.get('ticker', '^GSPC')
+    period = request.args.get('period', '10y')
+
+    try:
+        # Get 10-year history
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=period)
+
+        if df.empty:
+            return jsonify({'error': 'No data found for ticker'}), 404
+
+        # Calculate weekly returns
+        df = df.resample('W').last()  # take weekly closing prices
+        df['Returns'] = df['Close'].pct_change() * 100
+        df['Week'] = df.index.isocalendar().week
+        df['Year'] = df.index.year
+
+        # Calculate average return per week across all years
+        weekly_avg = (
+            df.groupby('Week')['Returns']
+            .mean()
+            .fillna(0)
+            .reset_index()
+            .rename(columns={'Returns': 'avg_return'})
+        )
+
+        # Calculate current year-to-date (YTD) cumulative trend
+        start = datetime(datetime.now().year, 1, 1)
+        end = datetime.now()
+        ytd = stock.history(start=start, end=end)
+        ytd['Cumulative'] = (ytd['Close'] / ytd['Close'].iloc[0] - 1) * 100
+        ytd['Week'] = ytd.index.isocalendar().week
+
+        ytd_weekly = (
+            ytd.groupby('Week')['Cumulative']
+            .last()
+            .reset_index()
+            .rename(columns={'Cumulative': 'ytd_return'})
+        )
+
+        # Merge both datasets for easy plotting
+        merged = pd.merge(weekly_avg, ytd_weekly, on='Week', how='outer').fillna(0)
+
+        return jsonify({
+            'ticker': ticker,
+            'period': period,
+            'analysis_type': 'weekly',
+            'weekly_avg': merged.to_dict('records')
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
 @app.route('/seasonality/monthly', methods=['GET'])
 def monthly_seasonality():
     ticker = request.args.get('ticker', '^GSPC')
