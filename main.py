@@ -230,6 +230,109 @@ def quarterly_seasonality():
         'data': result
     })
 
+@app.route('/seasonality/annual', methods=['GET'])
+def annual_seasonality():
+    """
+    Calculate annual seasonality trend showing cumulative performance by week.
+    Compares 10-year average pattern with current YTD performance.
+    
+    Query params:
+    - ticker: Stock/Index ticker (default: ^GSPC)
+    - period: Data period (default: 10y)
+    """
+    ticker = request.args.get('ticker', '^GSPC')
+    period = request.args.get('period', '10y')
+    
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=period)
+        
+        if df.empty:
+            return jsonify({'error': 'No data found for ticker'}), 404
+        
+        # Add week and year columns
+        df['Week'] = df.index.isocalendar().week
+        df['Year'] = df.index.year
+        
+        # Calculate 10-year average cumulative performance by week
+        yearly_data = []
+        
+        for year in df['Year'].unique():
+            year_df = df[df['Year'] == year].copy()
+            if len(year_df) < 10:  # Skip incomplete years
+                continue
+            
+            # Get first trading day price of the year
+            first_price = year_df['Close'].iloc[0]
+            year_df['Cumulative'] = (year_df['Close'] / first_price - 1) * 100
+            
+            # Group by week
+            weekly = year_df.groupby('Week').agg({
+                'Cumulative': 'last'
+            }).reset_index()
+            
+            weekly['Year'] = year
+            yearly_data.append(weekly)
+        
+        if not yearly_data:
+            return jsonify({'error': 'Insufficient data'}), 404
+        
+        # Combine all years
+        all_years = pd.concat(yearly_data, ignore_index=True)
+        
+        # Calculate average cumulative performance per week
+        avg_performance = all_years.groupby('Week').agg({
+            'Cumulative': 'mean'
+        }).reset_index()
+        avg_performance.columns = ['week', 'avg_performance']
+        
+        # Get current YTD performance
+        current_year = datetime.now().year
+        start = datetime(current_year, 1, 1)
+        end = datetime.now()
+        
+        ytd_df = stock.history(start=start, end=end)
+        
+        if not ytd_df.empty:
+            first_price_ytd = ytd_df['Close'].iloc[0]
+            ytd_df['Cumulative'] = (ytd_df['Close'] / first_price_ytd - 1) * 100
+            ytd_df['Week'] = ytd_df.index.isocalendar().week
+            
+            ytd_performance = ytd_df.groupby('Week').agg({
+                'Cumulative': 'last'
+            }).reset_index()
+            ytd_performance.columns = ['week', 'ytd_performance']
+        else:
+            ytd_performance = pd.DataFrame(columns=['week', 'ytd_performance'])
+        
+        # Merge both datasets
+        result = pd.merge(
+            avg_performance, 
+            ytd_performance, 
+            on='week', 
+            how='left'
+        )
+        
+        # Fill weeks 1-52 to ensure complete data
+        full_weeks = pd.DataFrame({'week': range(1, 53)})
+        result = pd.merge(full_weeks, result, on='week', how='left')
+        
+        # Forward fill avg_performance for smoother lines
+        result['avg_performance'] = result['avg_performance'].fillna(method='ffill').fillna(0)
+        # Don't forward fill YTD - leave as null for future weeks
+        # result['ytd_performance'] remains with NaN for weeks not yet completed
+        
+        return jsonify({
+            'ticker': ticker,
+            'period': period,
+            'current_year': current_year,
+            'analysis_type': 'annual_seasonality',
+            'data': result.to_dict('records')
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
 @app.route('/seasonality/compare', methods=['GET'])
 def compare_seasonality():
     """
