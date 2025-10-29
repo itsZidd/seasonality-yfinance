@@ -127,6 +127,9 @@ def calculate_weekly_seasonality_with_price(ticker, period='10y'):
         merged = pd.merge(avg, ytd_prices, on='Week', how='outer')
         merged = merged[merged['Week'] <= 53]
         merged['avg_10y'] = merged['avg_10y'] * 100
+        
+        # Fill NaN values - use ffill() instead of fillna(method='ffill')
+        merged['ytd_price'] = merged['ytd_price'].ffill()
 
         return merged.to_dict('records')
 
