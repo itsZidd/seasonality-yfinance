@@ -86,8 +86,8 @@ def calculate_ytd_trend(ticker):
         return {'error': str(e)}
 
 
-def calculate_weekly_seasonality(ticker, period='10y'):
-    """Cumulative weekly seasonality (%)."""
+def calculate_weekly_seasonality_with_price(ticker, period='10y'):
+    """Cumulative weekly seasonality (%) with actual YTD prices."""
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period=period)
@@ -99,13 +99,11 @@ def calculate_weekly_seasonality(ticker, period='10y'):
         df['Week'] = df.index.isocalendar().week
         df['Year'] = df.index.isocalendar().year
 
-        # Weekly aggregated returns
+        # Weekly aggregated returns for historical average
         weekly = df.groupby(['Year', 'Week'])['Return'].sum().reset_index()
-
-        # Calculate cumulative per year
         weekly['Cumulative'] = (1 + weekly['Return']).groupby(weekly['Year']).cumprod() - 1
 
-        # Average across years
+        # Average across years (percentage)
         avg = (
             weekly.groupby('Week')['Cumulative']
             .mean()
@@ -113,14 +111,22 @@ def calculate_weekly_seasonality(ticker, period='10y'):
             .rename(columns={'Cumulative': 'avg_10y'})
         )
 
-        # Get YTD
+        # Get YTD actual prices (not percentage)
         current_year = datetime.now().year
-        ytd = weekly[weekly['Year'] == current_year][['Week', 'Cumulative']].rename(columns={'Cumulative': 'ytd'})
+        start = datetime(current_year, 1, 1)
+        ytd_df = stock.history(start=start, end=datetime.now())
+        
+        if not ytd_df.empty:
+            ytd_df['Week'] = ytd_df.index.isocalendar().week
+            ytd_prices = ytd_df.groupby('Week')['Close'].last().reset_index()
+            ytd_prices.columns = ['Week', 'ytd_price']
+        else:
+            ytd_prices = pd.DataFrame(columns=['Week', 'ytd_price'])
 
-        merged = pd.merge(avg, ytd, on='Week', how='outer').fillna(method='ffill')
+        # Merge both
+        merged = pd.merge(avg, ytd_prices, on='Week', how='outer')
         merged = merged[merged['Week'] <= 53]
         merged['avg_10y'] = merged['avg_10y'] * 100
-        merged['ytd'] = merged['ytd'] * 100
 
         return merged.to_dict('records')
 
@@ -151,7 +157,7 @@ def weekly_seasonality():
     ticker = request.args.get('ticker', '^GSPC')
     period = request.args.get('period', '10y')
 
-    data = calculate_weekly_seasonality(ticker, period)
+    data = calculate_weekly_seasonality_with_price(ticker, period)
     if data is None or (isinstance(data, dict) and 'error' in data):
         return jsonify({'error': 'No data found'}), 404
 
